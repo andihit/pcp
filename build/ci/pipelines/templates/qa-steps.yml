@@ -4,7 +4,7 @@ parameters:
 steps:
 - script: |
     set -e
-    docker build -f build/containers/qa/Dockerfile.${{ parameters.distribution }} -t pcp-qa .
+    docker build -f build/ci/Dockerfile.${{ parameters.distribution }} -t pcp-qa .
     docker run -d --privileged \
       -v /lib/modules:/lib/modules:ro \
       -v /usr/src:/usr/src:ro \
