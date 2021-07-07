@@ -19,6 +19,7 @@
 #include "discover.h"
 #include "schema.h"
 #include "util.h"
+#include <uv.h>
 
 void initSeriesLoadBaton(seriesLoadBaton *, void *, pmSeriesFlags, 
 	pmLogInfoCallBack, pmSeriesDoneCallBack, redisSlots *, void *);
@@ -435,53 +436,101 @@ pmwebapi_add_valueset(metric_t *metric, pmValueSet *vsp)
 }
 
 static void
-series_cache_update(seriesLoadBaton *baton, struct dict *exclude)
+do_later(uv_loop_t *loop, uv_timer_cb cb, void *data)
 {
-    seriesGetContext	*context = &baton->pmapi;
+    uv_timer_t		*timer;
+
+    timer = calloc(1, sizeof(uv_timer_t));
+    timer->data = data;
+    uv_timer_init(loop, timer);
+    uv_timer_start(timer, cb, 0, 0);
+}
+
+struct seriesCacheUpdateState {
+    int step;
+    seriesLoadBaton *baton;
+    struct dict *exclude;
+    sds timestamp;
+    int write_data;
+    int i;
+};
+
+static void
+on_timer_close_complete(uv_handle_t *handle)
+{
+    free(handle);
+}
+
+static void
+__series_cache_update(uv_timer_t *timer)
+{
+    struct seriesCacheUpdateState *s = timer->data;
+    seriesGetContext	*context = &s->baton->pmapi;
     context_t		*cp = &context->context;
     pmResult		*result = context->result;
     pmValueSet		*vsp;
     metric_t		*metric = NULL;
     char		ts[64];
-    sds			timestamp;
-    int			i, write_meta, write_inst, write_data;
+    int			write_meta, write_inst;
 
-    timestamp = sdsnew(timeval_stream_str(&result->timestamp, ts, sizeof(ts)));
-    write_data = (!(baton->flags & PM_SERIES_FLAG_METADATA));
+    uv_close((uv_handle_t*)timer, on_timer_close_complete);
 
-    if (result->numpmid == 0) {
-	seriesBatonReference(context, "series_cache_update[mark]");
-	server_cache_mark(baton, timestamp, write_data);
-	goto out;
-    }
+    /* async state machine */
+    while(1) {
+    switch(s->step) {
+    case 0: /* initialize */
+	s->timestamp = sdsnew(timeval_stream_str(&result->timestamp, ts, sizeof(ts)));
+	s->write_data = (!(s->baton->flags & PM_SERIES_FLAG_METADATA));
 
-    pmSortInstances(result);
+	if (result->numpmid == 0) {
+	    seriesBatonReference(context, "series_cache_update[mark]");
+	    server_cache_mark(s->baton, s->timestamp, s->write_data);
+	    s->step = 3;
+	    break;
+	}
 
-    for (i = 0; i < result->numpmid; i++) {
-	vsp = result->vset[i];
-	if (vsp->numval == 0)
-	    continue;
+	pmSortInstances(result);
+	print_memstats_info("series_cache_update loop start");
+	s->i = 0;
+
+    case 1: /* single loop iteration */
+        if (!(s->i < result->numpmid)) {
+	    s->step = 3;
+	    break;
+	}
+
+	vsp = result->vset[s->i];
+	if (vsp->numval == 0) {
+	    s->step = 2;
+	    break;
+	}
 
 	/* check if in the restricted group (optional metric filter) */
-	if (dictSize(baton->wanted) &&
-	    dictFetchValue(baton->wanted, &vsp->pmid) == NULL)
-	    continue;
+	if (dictSize(s->baton->wanted) &&
+	    dictFetchValue(s->baton->wanted, &vsp->pmid) == NULL) {
+	    s->step = 2;
+	    break;
+	}
 
 	/* check if metric to be skipped (optional metric exclusion) */
-	if (exclude && (dictFind(exclude, &vsp->pmid)) != NULL)
-	    continue;
+	if (s->exclude && (dictFind(s->exclude, &vsp->pmid)) != NULL) {
+	    s->step = 2;
+	    break;
+	}
 
 	write_meta = write_inst = 0;
 
 	/* check if pmid already in hash list */
 	if ((metric = dictFetchValue(cp->pmids, &vsp->pmid)) == NULL) {
 	    /* create a new metric, and add it to load context */
-	    if ((metric = new_metric(baton, vsp)) == NULL)
-		continue;
+	    if ((metric = new_metric(s->baton, vsp)) == NULL) {
+		s->step = 2;
+		break;
+	    }
 	    write_meta = 1;
 	} else {	/* pmid already observed */
 	    if ((write_meta = metric->cached) == 0)
-		get_metric_metadata(baton, metric);
+		get_metric_metadata(s->baton, metric);
 	}
 
 	/* iterate through result instances and ensure metric_t is complete */
@@ -495,16 +544,37 @@ series_cache_update(seriesLoadBaton *baton, struct dict *exclude)
 
 	/* make PMAPI calls to cache metadata */
 	if (write_meta)
-	    get_instance_metadata(baton, metric->desc.indom, write_inst);
+	    get_instance_metadata(s->baton, metric->desc.indom, write_inst);
 
 	/* initiate writes to backend caching servers (Redis) */
-	server_cache_metric(baton, metric, timestamp, write_meta, write_data);
-    }
+	server_cache_metric(s->baton, metric, s->timestamp, write_meta, s->write_data);
 
-out:
-    sdsfree(timestamp);
-    /* drop reference taken in server_cache_window */
-    doneSeriesGetContext(context, "series_cache_update");
+	s->step = 2;
+	do_later(s->baton->slots->events, __series_cache_update, s);
+	return;
+
+    case 2: /* loop step */
+	s->i++;
+	s->step = 1;
+	break;
+
+    case 3: /* after loop */
+	sdsfree(s->timestamp);
+	/* drop reference taken in server_cache_window */
+	doneSeriesGetContext(context, "series_cache_update");
+	free(s);
+	return;
+    }
+    }
+}
+
+static void
+series_cache_update(seriesLoadBaton *baton, struct dict *exclude)
+{
+    struct seriesCacheUpdateState *state = calloc(1, sizeof(struct seriesCacheUpdateState));
+    state->baton = baton;
+    state->exclude = exclude;
+    do_later(baton->slots->events, __series_cache_update, state);
 }
 
 static int
