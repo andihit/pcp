@@ -19,6 +19,7 @@
 #include "discover.h"
 #include "schema.h"
 #include "util.h"
+#include "observability.h"
 
 void initSeriesLoadBaton(seriesLoadBaton *, void *, pmSeriesFlags, 
 	pmLogInfoCallBack, pmSeriesDoneCallBack, redisSlots *, void *);
@@ -1310,7 +1311,12 @@ pmSeriesDiscoverValues(pmDiscoverEvent *event, pmResult *result, void *arg)
     baton->arg = arg;
     context->result = result;
 
+    print_memstats_info("cache update start");
+    //HeapProfilerStart("cache");
     series_cache_update(baton, data->pmids);
+    //HeapProfilerDump("cache update stop");
+    //HeapProfilerStop();
+    print_memstats_info("cache update stop");
 }
 
 void

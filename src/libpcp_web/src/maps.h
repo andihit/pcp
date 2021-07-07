@@ -38,6 +38,11 @@ extern void redisMapInsert(redisMap *, sds, sds);
 /*
  * Helper utilities and data structures
  */
+typedef struct redisMapPrivdata {
+  sds name;
+  long bytes;
+} redisMapPrivdata;
+
 extern void redisMapsInit(void);
 extern sds redisMapName(redisMap *);
 extern void redisMapRelease(redisMap *);

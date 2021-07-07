@@ -19,6 +19,7 @@
 #include <strings.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include "observability.h"
 
 #define MAXPENDING	128	/* maximum number of pending connections */
 #define STRINGIFY(s)    #s
@@ -338,6 +339,12 @@ set_rlimit_maxfiles(void)
 int
 main(int argc, char *argv[])
 {
+    print_memstats_info("main start");
+    int *x = calloc(1024*1024*5,sizeof(char));
+    print_memstats_info("main after malloc");
+    free(x);
+    print_memstats_info("main after free");
+
     int		sts;
     int		nport = 0;
     int		localhost = 0;

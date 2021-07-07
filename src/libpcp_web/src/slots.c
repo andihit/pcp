@@ -264,12 +264,14 @@ redisSlotsReplyDataAlloc(redisSlots *slots, size_t req_size,
     srd->req_size = req_size;
     srd->callback = callback;
     srd->arg = arg;
+    //fprintf(stderr,"current inflight: %d\n", slots->inflight_requests);
     return srd;
 }
 
 void
 redisSlotsReplyDataFree(redisSlotsReplyData *srd)
 {
+        //fprintf(stderr,"current inflight: %d\n", srd->slots->inflight_requests);
     free(srd);
 }
 

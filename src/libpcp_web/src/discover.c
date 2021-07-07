@@ -17,6 +17,7 @@
 #include <dirent.h>
 #include <fnmatch.h>
 #include <sys/stat.h>
+#include "observability.h"
 
 /* Decode various archive metafile records (desc, indom, labels, helptext) */
 static int pmDiscoverDecodeMetaDesc(uint32_t *, int, pmDesc *, int *, char ***);
@@ -441,7 +442,7 @@ fs_change_callBack(uv_fs_event_t *handle, const char *filename, int events, int 
     char		*s;
     sds			path;
     struct stat		statbuf;
-
+fprintf(stderr,"UV: fs_change_callBack start\n");
     uv_fs_event_getpath(handle, buffer, &bytes);
     path = sdsnewlen(buffer, bytes);
 
@@ -490,6 +491,7 @@ fs_change_callBack(uv_fs_event_t *handle, const char *filename, int events, int 
 	p->changed(p); /* returns immediately if PM_DISCOVER_FLAGS_DELETED */
 
     sdsfree(path);
+    fprintf(stderr,"UV: fs_change_callBack stop\n");
 }
 
 /*
@@ -1032,6 +1034,8 @@ process_metadata(pmDiscover *p)
 		p->context.name, pmDiscoverFlagsStr(p));
     pmDiscoverStatsAdd(p->module, "metadata.callbacks", NULL, 1);
     lock_path = archive_dir_lock_path(p);
+
+    print_memstats_info("process_metadata start");
     for (;;) {
 	if (lock_path && access(lock_path, F_OK) == 0)
 	    break;
@@ -1197,6 +1201,8 @@ process_metadata(pmDiscover *p)
 	}
     }
 
+    print_memstats_info("process_metadata stop");
+
     if (partial == 0)
 	/* flag that all available metadata has now been read */
 	p->flags &= ~PM_DISCOVER_FLAGS_META_IN_PROGRESS;
@@ -1239,6 +1245,8 @@ process_logvol(pmDiscover *p)
 
     pmDiscoverStatsAdd(p->module, "logvol.callbacks", NULL, 1);
     lock_path = archive_dir_lock_path(p);
+
+    print_memstats_info("process_logvol start");
     for (;;) {
 	if (lock_path && access(lock_path, F_OK) == 0)
 	    break;
@@ -1303,16 +1311,21 @@ process_logvol(pmDiscover *p)
 	ts.tv_sec = r->timestamp.tv_sec;
 	ts.tv_nsec = r->timestamp.tv_usec * 1000;
 	bump_logvol_decode_stats(p, r);
+	print_memstats_info("pmDiscoverInvokeValuesCallBack start (in loop)");
 	pmDiscoverInvokeValuesCallBack(p, &ts, r);
+	print_memstats_info("pmDiscoverInvokeValuesCallBack stop (in loop)");
 	pmFreeResult(r);
 	r = NULL;
     }
+     print_memstats_info("process_logvol stop");
 
     if (r) {
 	ts.tv_sec = r->timestamp.tv_sec;
 	ts.tv_nsec = r->timestamp.tv_usec * 1000;
 	bump_logvol_decode_stats(p, r);
+	print_memstats_info("pmDiscoverInvokeValuesCallBack start");
 	pmDiscoverInvokeValuesCallBack(p, &ts, r);
+	print_memstats_info("pmDiscoverInvokeValuesCallBack stop");
 	pmFreeResult(r);
     }
 
@@ -1506,6 +1519,7 @@ changed_callback(pmDiscover *p)
     }
     p->lastcb = now;
 
+    print_memstats_info("changed_callback start");
     pmDiscoverStatsAdd(p->module, "changed_callbacks", NULL, 1);
     if (pmDebugOptions.discovery)
 	fprintf(stderr, "CHANGED %s (%s)\n", p->context.name,
@@ -1556,6 +1570,7 @@ changed_callback(pmDiscover *p)
 	pmDiscoverTraverse(PM_DISCOVER_FLAGS_ALL, print_callback);
 	fprintf(stderr, "--\n");
     }
+    print_memstats_info("changed_callback stop");
 }
 
 static void
@@ -1583,7 +1598,7 @@ pmDiscoverRegister(const char *dir, pmDiscoverModule *module,
     int			handle = -1;
     int			avail_handle;
     pmDiscoverCallBacks	**cbp;
-
+    print_memstats_info("pmDiscoverRegister start");
     while (callbacks != NULL) {
 	avail_handle = -1;
 	for (handle = 0; handle < discoverCallBackTableSize; handle++) {

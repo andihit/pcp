@@ -22,6 +22,7 @@
 #include "maps.h"
 #include "util.h"
 #include "sha1.h"
+#include "observability.h"
 
 /* dynamic memory manipulation */
 static void
@@ -1339,6 +1340,7 @@ pmwebapi_indom_help(struct context *context, struct indom *indom)
 	sts = pmLookupInDomText(id, PM_TEXT_ONELINE | PM_TEXT_DIRECT, &text);
 	if (sts == 0) {
 	    indom->oneline = sdsnew(text);
+            memstats()->helptexts += strlen(text);
 	    free(text);
 	} else if (sts == PM_ERR_IPC) {
 	    context->setup = 0;
@@ -1348,6 +1350,7 @@ pmwebapi_indom_help(struct context *context, struct indom *indom)
 	sts = pmLookupInDomText(id, PM_TEXT_HELP | PM_TEXT_DIRECT, &text);
 	if (sts == 0) {
 	    indom->helptext = sdsnew(text);
+            memstats()->helptexts += strlen(text);
 	    free(text);
 	} else if (sts == PM_ERR_IPC) {
 	    context->setup = 0;

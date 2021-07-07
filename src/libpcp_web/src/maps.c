@@ -15,6 +15,8 @@
 #include "slots.h"
 #include "util.h"
 #include "maps.h"
+#include "zmalloc.h"
+#include "observability.h"
 
 /* reverse hash mapping of all SHA1 hashes to strings */
 redisMap *instmap;
@@ -131,22 +133,28 @@ redisMapsInit(void)
 	return;
     setup = 1;
 
-    instmap = dictCreate(&sdsDictCallBacks, (void *)sdsnew(mapnames[0]));
-    namesmap = dictCreate(&sdsDictCallBacks, (void *)sdsnew(mapnames[1]));
-    labelsmap = dictCreate(&sdsDictCallBacks, (void *)sdsnew(mapnames[2]));
-    contextmap = dictCreate(&sdsDictCallBacks, (void *)sdsnew(mapnames[3]));
+    instmap = redisMapCreate(sdsnew(mapnames[0]));
+    namesmap = redisMapCreate(sdsnew(mapnames[1]));
+    labelsmap = redisMapCreate(sdsnew(mapnames[2]));
+    contextmap = redisMapCreate(sdsnew(mapnames[3]));
 }
 
 sds
 redisMapName(redisMap *map)
 {
-    return (sds)map->privdata;
+        if (map->privdata == NULL)
+        fprintf(stderr,"privdata is %p\n", map->privdata);
+    redisMapPrivdata *privdata = map->privdata;
+    return privdata->name;
 }
 
 redisMap *
 redisMapCreate(sds name)
 {
-    return dictCreate(&sdsDictCallBacks, (void *)name);
+    redisMapPrivdata *privdata = zmalloc(sizeof(redisMapPrivdata));
+    privdata->name = name;
+    privdata->bytes = 0;
+    return dictCreate(&sdsDictCallBacks, privdata);
 }
 
 redisMapEntry *
@@ -167,6 +175,8 @@ redisMapInsert(redisMap *map, sds key, sds value)
 	dictDelete(map, key);
     }
     dictAdd(map, key, value);
+    memstats()->maps += sdslen(key) + sdslen(value);
+    //print_memstats();
 }
 
 sds
@@ -179,5 +189,6 @@ void
 redisMapRelease(redisMap *map)
 {
     sdsfree(redisMapName(map));
+    free(map->privdata);
     dictRelease(map);
 }

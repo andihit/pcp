@@ -227,6 +227,7 @@ PCP_WEB_1.16 {
   global:
     redisSlotsSetupMetrics;
     redisSlotsSetMetricRegistry;
+    print_memstats_info;
 } PCP_WEB_1.15;
 
 PCP_WEB_1.17 {

@@ -19,6 +19,7 @@
 #include "discover.h"
 #include "util.h"
 #include "sha1.h"
+#include "observability.h"
 
 #define STRINGIFY(s)	#s
 #define TO_STRING(s)	STRINGIFY(s)
@@ -496,6 +497,8 @@ annotate_metric(const pmLabel *label, const char *json, void *arg)
     list->value = sdsnewlen(json + label->value, label->valuelen);
     list->flags = label->flags;
 
+memstats()->annotate += sdslen(list->name)+sdslen(list->value);
+
     if (pmDebugOptions.series) {
 	fprintf(stderr, "Annotate metric %s", metric->names[0].sds);
 	if (instance)
@@ -591,6 +594,7 @@ redis_series_label(redisSlots *slots, metric_t *metric, char *hash,
     char			namehash[42], valhash[42];
     sds				cmd, key, val;
     int				i;
+print_memstats_info("redis_series_label start");
 
     seriesBatonReferences(baton, 3, "redis_series_label");
 
@@ -647,6 +651,8 @@ redis_series_label(redisSlots *slots, metric_t *metric, char *hash,
     redisSlotsRequest(slots, cmd,
 			redis_series_label_set_callback, arg);
     sdsfree(cmd);
+
+    print_memstats_info("redis_series_label stop");
 }
 
 static void
@@ -730,6 +736,11 @@ redis_series_metric(redisSlots *slots, metric_t *metric,
     value_t			*value;
     int				i;
 
+//print_memstats_info("redis_series_metric uvrun start");
+//uv_run(slots->events, UV_RUN_NOWAIT);
+//print_memstats_info("redis_series_metric uvrun stop");
+
+print_memstats_info("redis_series_metric start");
     /*
      * First satisfy any/all mappings for metric name, instance
      * names, label names and values.  This may issue updates to
@@ -746,7 +757,7 @@ redis_series_metric(redisSlots *slots, metric_t *metric,
 		    series_name_mapping_callback,
 		    baton->info, baton->userdata, baton);
     }
-
+print_memstats_info("redis_series_metric 1");
     /* ensure all metric or instance label strings are mapped */
     if (metric->desc.indom == PM_INDOM_NULL || metric->u.vlist == NULL) {
 	if (metric->cached == 0)
@@ -772,13 +783,19 @@ redis_series_metric(redisSlots *slots, metric_t *metric,
 	}
     }
 
+    print_memstats_info("redis_series_metric 2");
+
     /* push the metric, instances and any label metadata into the cache */
     if (meta || data)
 	redis_series_metadata(&baton->pmapi.context, metric, baton);
 
+    print_memstats_info("redis_series_metric 3");
+
     /* push values for all instances, no-value or errors into the cache */
     if (data)
 	redis_series_streamed(timestamp, metric, baton);
+
+    print_memstats_info("redis_series_metric stop");
 }
 
 static void
@@ -844,6 +861,7 @@ redis_series_metadata(context_t *context, metric_t *metric, void *arg)
 
     if (metric->cached)
 	goto check_instances;
+print_memstats_info("redis_series_metadata uncached");
 
     indom = pmwebapi_indom_str(metric, ibuf, sizeof(ibuf));
     pmid = pmwebapi_pmid_str(metric, pbuf, sizeof(pbuf));
@@ -916,7 +934,7 @@ redis_series_metadata(context_t *context, metric_t *metric, void *arg)
 	cmd = redis_param_sha(cmd, metric->names[i].hash);
     redisSlotsRequest(slots, cmd, redis_series_source_callback, arg);
     sdsfree(cmd);
-
+print_memstats_info("redis_series_metadata check_instances 1");
 check_instances:
     if (metric->desc.indom != PM_INDOM_NULL &&
         (baton->flags & PM_SERIES_FLAG_TEXT) && slots->search) {
@@ -925,7 +943,7 @@ check_instances:
 	redis_search_text_add(slots, PM_SEARCH_TYPE_INDOM, indom, indom,
 			metric->indom->oneline, metric->indom->helptext, baton);
     }
-
+print_memstats_info("redis_series_metadata check_instances 2");
     if (metric->desc.indom == PM_INDOM_NULL || metric->u.vlist == NULL) {
 	if (metric->cached == 0) {
 	    redis_series_labelset(slots, metric, NULL, baton);
@@ -937,8 +955,13 @@ check_instances:
 	    if ((instance = dictFetchValue(metric->indom->insts, &value->inst)) == NULL)
 		continue;
 	    if (instance->cached == 0 || metric->cached == 0) {
+                    print_memstats_info("redis_series_metadata check_instances 2.1");
+
 		redis_series_instance(slots, metric, instance, baton);
+                print_memstats_info("redis_series_metadata check_instances 2.2");
+
 		redis_series_labelset(slots, metric, instance, baton);
+print_memstats_info("redis_series_metadata check_instances 2.3");
 
 		if ((baton->flags & PM_SERIES_FLAG_TEXT) && slots->search) {
 		    if (indom == NULL)
@@ -951,6 +974,8 @@ check_instances:
 	}
 	metric->cached = 1;
     }
+    print_memstats_info("redis_series_metadata check_instances 3");
+
 }
 
 typedef struct redisStreamBaton {
